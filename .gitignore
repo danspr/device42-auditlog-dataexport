@@ -1,0 +1,35 @@
+# Virtual environment
+venv/
+env/
+.env
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Logs and databases
+*.log
+*.sqlite3
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+
+# Dependency files
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Exported audit log files
+*.csv
+*.json
+*.xlsx
+/export/*.csv
+/export/*.json
+/export/*.xlsx
