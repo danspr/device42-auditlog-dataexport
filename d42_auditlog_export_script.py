@@ -5,13 +5,17 @@ import urllib3
 import base64
 from datetime import datetime
 import json
+import ast
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 D42_HOST = "172.16.3.141"
 D42_USERNAME = "admin"
 D42_PASSWORD = "C0mpn3t!"
 D42_API_URL = "https://" + D42_HOST + "/services/data/v1.0/query/"
-QUERY_INTERVAL_DAYS = 60
+QUERY_INTERVAL_DAYS = 90
+CUSTOM_FIELDS = {
+    "1": "Asset Tag"
+}
 
 
 def get_auditlog_data(query):
@@ -37,26 +41,64 @@ def get_auditlog_data(query):
     
 def getKeyMapping(key):
     key_mapping = {
+        'object_id': 'Device ID',
+        'name': 'Device Name',
+        'auditlog_pk': 'Log ID',
+        'action_date_time': 'Changed Time',
+        'origin': 'Origin',
+        'user': 'Changed By',
+        'changed_fields': 'Changed Fields',
         'type_id': 'type'
     }
     return key_mapping.get(key, key)
 
-def process_changed_fields(record):
-    cf = record.get('changed_fields')
-    if cf is None:
-        return record
+def process_changed_fields_details(recordDetails):
+    kv_pairs = []
+    recordDetails = json.loads(recordDetails)
+    for key, value in recordDetails.items():
+        display_key = getKeyMapping(key)
+        kv_pairs.append(f"{display_key}: {value}")
+    return kv_pairs
+
+def process_changed_fields_custom(record):
+    formatted_str = record.replace("=>", ":")
+    parsed_dict = ast.literal_eval(f"{{{formatted_str}}}")
+    result_str = ", ".join(f"{CUSTOM_FIELDS.get(k, k)}: {v}" for k, v in parsed_dict.items())
+    return result_str
+    
+def get_value(row_data, key, default=None):
+    return row_data.get(key, default)
+
+def process_changed_fields(cf):
+    data = ''
     if isinstance(cf, dict):
         if len(cf) == 1 and 'last_discovered' in cf:
-            record['changed_fields'] = None
+            data = None
         else:
             kv_pairs = []
             for key, value in cf.items():
-                display_key = getKeyMapping(key)
-                kv_pairs.append(f"{display_key}: {value}")
-            record['changed_fields'] = "\n".join(kv_pairs)
-    else:
-        record['changed_fields'] = cf
-    return record
+                if key == 'details':
+                    fieldDetail = process_changed_fields_details(value)
+                    kv_pairs.append(f"{fieldDetail}")
+                elif key == 'custom_fields':
+                    fieldDetail = process_changed_fields_custom(value)
+                    kv_pairs.append(f"{fieldDetail}")
+                else:
+                    display_key = getKeyMapping(key)
+                    kv_pairs.append(f"{display_key}: {value}")
+            data = "\n".join(kv_pairs)
+    return data
+
+def process_row_data(rowData, changedFields):
+    data = ''
+    if(changedFields is not None):
+        if isinstance(changedFields, dict):
+            kv_pairs = []
+            for key, value in changedFields.items():
+                if key != 'custom_fields':
+                    kv_pairs.append(f"{key}: {get_value(rowData, key)}")
+            data = "\n".join(kv_pairs)
+    return data
 
 def export_to_excel(data, output_file):
     if isinstance(data, dict) and 'result' in data:
@@ -72,7 +114,7 @@ def export_to_excel(data, output_file):
         print("Error exporting to Excel:", e)
 
 def getQueryLog():
-    query = f"""SELECT a.auditlog_pk, a.object_id, b.name, a.action_date_time, a.origin, a.user, a.changed_fields
+    query = f"""SELECT a.auditlog_pk, a.object_id, b.name, a.action_date_time, a.origin, a.user, a.row_data as original_data, a.changed_fields
             FROM view_auditlog_v2 a 
             LEFT JOIN view_device_v1 b on a.object_id = b.device_pk 
             WHERE a.type = 'Device' and a.action = 'Update'
@@ -90,11 +132,18 @@ def main():
 
     data = []
     for item in response:
-        tempData = process_changed_fields(item)
-        if tempData['changed_fields'] is not None:
-            data.append(tempData)
+        changedData = process_changed_fields(item['changed_fields'])
+        rowData = process_row_data(item['original_data'], item['changed_fields'])
+        if changedData is None:
+            continue
+        else:
+            item['changed_fields'] = changedData
         
-    
+        
+        if rowData is not None:
+            item['original_data'] = rowData
+        data.append(item)
+
     now = datetime.now()
     currentDatetime = now.strftime("%Y-%m-%d_%H.%M.%S")
     fileName = "export/device42_auditlog_export_" + currentDatetime + ".xlsx"
